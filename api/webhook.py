@@ -188,17 +188,24 @@ def process_update(update):
         first_name = message.get("from", {}).get("first_name", "there")
         first_name = (first_name.replace("&", "&amp;").replace("<", "&lt;")
                       .replace(">", "&gt;"))
+        small_caps = str.maketrans({
+            "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ","g":"ɢ",
+            "h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ","m":"ᴍ","n":"ɴ",
+            "o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ","s":"ꜱ","t":"ᴛ","u":"ᴜ",
+            "v":"ᴠ","w":"ᴡ","x":"x","y":"ʏ","z":"ᴢ",
+        })
+        first_name = first_name.translate(small_caps)
         send_text(
             chat_id,
-            "⎯꯭̽͢ 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐓𝐎 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 𝐑𝐄𝐄𝐋 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ⎯꯭̽͢\\n\\n"
-            f"👋 <b>Hello, {first_name}!</b>\\n\\n"
-            "<blockquote>📥 <b>This bot helps you download Instagram Reels.</b></blockquote>\\n"
-            "<blockquote><b>To download a Reel:</b>\\n"
-            "1. Copy the Instagram Reel link.\\n"
-            "2. Send the link to this bot.\\n"
-            "3. Get the available video directly in Telegram.</blockquote>\\n\\n"
-            "━━━━━━━━━━━━━━━━━━\\n\\n"
-            "<blockquote>💬 <b>Need help?</b> Use the Support button below.</blockquote>",
+            "⎯‌꯭‌ <b>ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ɪɴꜱᴛᴀɢʀᴀᴍ ʀᴇᴇʟ ᴅᴏᴡɴʟᴏᴀᴅᴇʀ</b> ⎯‌꯭‌\n\n"
+            f"👋 <b>ʜᴇʟʟᴏ, {first_name}!</b>\n\n"
+            "<blockquote>📥 <b>ᴛʜɪꜱ ʙᴏᴛ ʜᴇʟᴘꜱ ʏᴏᴜ ᴅᴏᴡɴʟᴏᴀᴅ ɪɴꜱᴛᴀɢʀᴀᴍ ʀᴇᴇʟꜱ.</b></blockquote>\n"
+            "<blockquote><b>ᴛᴏ ᴅᴏᴡɴʟᴏᴀᴅ ᴀ ʀᴇᴇʟ:</b>\n"
+            "1. ᴄᴏᴘʏ ᴛʜᴇ ɪɴꜱᴛᴀɢʀᴀᴍ ʀᴇᴇʟ ʟɪɴᴋ.\n"
+            "2. ꜱᴇɴᴅ ᴛʜᴇ ʟɪɴᴋ ᴛᴏ ᴛʜɪꜱ ʙᴏᴛ.\n"
+            "3. ɢᴇᴛ ᴛʜᴇ ᴀᴠᴀɪʟᴀʙʟᴇ ᴠɪᴅᴇᴏ ᴅɪʀᴇᴄᴛʟʏ ɪɴ ᴛᴇʟᴇɢʀᴀᴍ.</blockquote>\n\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "<blockquote>💬 <b>ɴᴇᴇᴅ ʜᴇʟᴘ?</b> ᴜꜱᴇ ᴛʜᴇ ꜱᴜᴘᴘᴏʀᴛ ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ.</blockquote>",
             start_markup(),
             parse_mode="HTML",
         )
