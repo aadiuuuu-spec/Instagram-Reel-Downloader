@@ -1,0 +1,221 @@
+import glob
+import json
+import os
+import re
+import tempfile
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse
+
+import requests
+import yt_dlp
+
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
+OWNER_ID = int(os.environ.get("OWNER_ID", "7508536182"))
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
+DEVELOPER = os.environ.get("DEVELOPER_USERNAME", "@II_YUTA_II")
+SUPPORT_URL = os.environ.get("SUPPORT_GROUP_URL", "https://t.me/+xbOwGbcZA-AwZDkx")
+
+# Note: Vercel instances are stateless. This in-memory switch is suitable for
+# initial testing only and may reset when the function instance is recycled.
+BOT_ENABLED = True
+
+API = f"https://api.telegram.org/bot{BOT_TOKEN}"
+IG_RE = re.compile(r"https?://(?:www\.)?instagram\.com/(?:reel|reels|share/reel)/[^\s]+", re.I)
+
+
+def tg(method, data=None, files=None, timeout=25):
+    if not BOT_TOKEN:
+        raise RuntimeError("BOT_TOKEN is not configured")
+    response = requests.post(f"{API}/{method}", data=data, files=files, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    if not payload.get("ok"):
+        raise RuntimeError(payload.get("description", "Telegram API error"))
+    return payload.get("result")
+
+
+def send_text(chat_id, text, reply_markup=None):
+    payload = {"chat_id": chat_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    return tg("sendMessage", payload)
+
+
+def edit_text(chat_id, message_id, text, reply_markup=None):
+    payload = {"chat_id": chat_id, "message_id": message_id, "text": text}
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    return tg("editMessageText", payload)
+
+
+def is_instagram_reel(url):
+    parsed = urlparse(url)
+    return parsed.scheme in ("http", "https") and parsed.netloc.lower() in {
+        "instagram.com", "www.instagram.com"
+    } and bool(re.match(r"^/(reel|reels|share/reel)/", parsed.path, re.I))
+
+
+def start_markup():
+    return {
+        "inline_keyboard": [
+            [{"text": "📥 Download Reel", "callback_data": "download_help"}],
+            [
+                {"text": "Developer", "url": f"https://t.me/{DEVELOPER.lstrip('@')}"},
+                {"text": "Support", "url": SUPPORT_URL},
+            ],
+        ]
+    }
+
+
+def admin_markup():
+    return {
+        "inline_keyboard": [[
+            {"text": "🟢 TURN ON", "callback_data": "admin_on"},
+            {"text": "🔴 TURN OFF", "callback_data": "admin_off"},
+        ]]
+    }
+
+
+def download_reel(chat_id, url, reply_to=None):
+    status = send_text(chat_id, "⏳ Processing your Instagram Reel...")
+    status_id = status["message_id"]
+
+    try:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temp_dir:
+            options = {
+                "outtmpl": os.path.join(temp_dir, "reel.%(ext)s"),
+                "format": "best[ext=mp4]/best",
+                "noplaylist": True,
+                "quiet": True,
+                "no_warnings": True,
+                "socket_timeout": 20,
+                "retries": 1,
+                "max_filesize": 48 * 1024 * 1024,
+            }
+            with yt_dlp.YoutubeDL(options) as ydl:
+                info = ydl.extract_info(url, download=True)
+                title = (info.get("title") or "Instagram Reel")[:900]
+                candidates = glob.glob(os.path.join(temp_dir, "reel.*"))
+                if not candidates:
+                    raise RuntimeError("The Reel could not be downloaded.")
+                video_path = max(candidates, key=os.path.getsize)
+
+            size = os.path.getsize(video_path)
+            if size > 50 * 1024 * 1024:
+                raise RuntimeError("This video is larger than Telegram's 50 MB bot upload limit.")
+
+            method = "sendVideo" if video_path.lower().endswith(".mp4") else "sendDocument"
+            field = "video" if method == "sendVideo" else "document"
+            with open(video_path, "rb") as video:
+                tg(
+                    method,
+                    {"chat_id": chat_id, "caption": title[:1024]},
+                    files={field: (os.path.basename(video_path), video)},
+                    timeout=240,
+                )
+            tg("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
+    except Exception as exc:
+        message = str(exc)
+        if "private" in message.lower() or "login" in message.lower():
+            message = "This Reel is not publicly accessible. I can only process public Reels you own or have permission to download."
+        else:
+            message = "I couldn't download this Reel. It may be unavailable, unsupported, or too large."
+        try:
+            edit_text(chat_id, status_id, f"❌ {message}")
+        except Exception:
+            send_text(chat_id, f"❌ {message}")
+
+
+def process_update(update):
+    global BOT_ENABLED
+
+    callback = update.get("callback_query")
+    if callback:
+        data = callback.get("data", "")
+        user_id = callback.get("from", {}).get("id")
+        chat_id = callback.get("message", {}).get("chat", {}).get("id")
+        message_id = callback.get("message", {}).get("message_id")
+
+        if data in ("admin_on", "admin_off"):
+            if user_id != OWNER_ID:
+                tg("answerCallbackQuery", {"callback_query_id": callback["id"], "text": "Owner only."})
+                return
+            BOT_ENABLED = data == "admin_on"
+            state = "ON" if BOT_ENABLED else "OFF"
+            edit_text(chat_id, message_id, f"⚙️ Bot Control\n\nStatus: {state}", admin_markup())
+            tg("answerCallbackQuery", {"callback_query_id": callback["id"], "text": f"Bot turned {state}."})
+            return
+
+        if data == "download_help":
+            tg("answerCallbackQuery", {"callback_query_id": callback["id"]})
+            send_text(chat_id, "Send a public Instagram Reel link here. Only download videos you own or have permission to use.")
+            return
+
+    message = update.get("message") or update.get("edited_message")
+    if not message:
+        return
+
+    chat_id = message.get("chat", {}).get("id")
+    user_id = message.get("from", {}).get("id")
+    text = message.get("text", "").strip()
+    if not chat_id or not text:
+        return
+
+    if text.split()[0].split("@")[0] == "/admin":
+        if user_id != OWNER_ID:
+            send_text(chat_id, "⛔ This command is restricted to the bot owner.")
+            return
+        send_text(chat_id, f"⚙️ Bot Control\n\nStatus: {'ON' if BOT_ENABLED else 'OFF'}", admin_markup())
+        return
+
+    if text.split()[0].split("@")[0] == "/start":
+        if not BOT_ENABLED and user_id != OWNER_ID:
+            return
+        send_text(
+            chat_id,
+            "📥 𝖨ɴsᴛᴀɢʀᴀᴍ 𝖱ᴇᴇʟ 𝖣ᴏᴡɴʟᴏᴀᴅᴇʀ\n\n"
+            "Welcome! Send a public Instagram Reel link and I'll try to send the video here.\n\n"
+            "𝗙ᴇᴀᴛᴜʀᴇs\n"
+            "• Instagram Reel Download\n"
+            "• Best available single-file video quality\n"
+            "• Personal Chat Support\n"
+            "• Group Support\n"
+            "• Owner Bot Control (/admin)\n"
+            "• ON / OFF System\n\n"
+            f"Developer: {DEVELOPER}\n"
+            "Use only for Reels you own or have permission to download.",
+            start_markup(),
+        )
+        return
+
+    if not BOT_ENABLED:
+        return
+
+    match = IG_RE.search(text)
+    if match and is_instagram_reel(match.group(0).rstrip(".,)")):
+        download_reel(chat_id, match.group(0).rstrip(".,)"))
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        if WEBHOOK_SECRET and self.headers.get("X-Telegram-Bot-Api-Secret-Token") != WEBHOOK_SECRET:
+            self.send_response(403)
+            self.end_headers()
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            update = json.loads(self.rfile.read(length) or b"{}")
+            process_update(update)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+        except Exception:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"OK")
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"Instagram Reel Downloader webhook is running.")
