@@ -34,10 +34,12 @@ def tg(method, data=None, files=None, timeout=25):
     return payload.get("result")
 
 
-def send_text(chat_id, text, reply_markup=None):
+def send_text(chat_id, text, reply_markup=None, parse_mode=None):
     payload = {"chat_id": chat_id, "text": text}
     if reply_markup:
         payload["reply_markup"] = json.dumps(reply_markup)
+    if parse_mode:
+        payload["parse_mode"] = parse_mode
     return tg("sendMessage", payload)
 
 
@@ -183,18 +185,22 @@ def process_update(update):
     if text.split()[0].split("@")[0] == "/start":
         if not BOT_ENABLED and user_id != OWNER_ID:
             return
+        first_name = message.get("from", {}).get("first_name", "there")
+        first_name = (first_name.replace("&", "&amp;").replace("<", "&lt;")
+                      .replace(">", "&gt;"))
         send_text(
             chat_id,
-            "⎯꯭̽͢ 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐓𝐎 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 𝐑𝐄𝐄𝐋 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ⎯꯭̽͢\n\n"
-            f"👋 𝐇𝐞𝐥𝐥𝐨, {message.get('from', {}).get('first_name', 'there')}!\n\n"
-            "📥 𝐓𝐡𝐢𝐬 𝐛𝐨𝐭 𝐡𝐞𝐥𝐩𝐬 𝐲𝐨𝐮 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐑𝐞𝐞𝐥𝐬.\n\n"
-            "𝐓𝐨 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐚 𝐑𝐞𝐞𝐥:\n"
-            "1. Copy the Instagram Reel link.\n"
-            "2. Send the link to this bot.\n"
-            "3. Get the available video directly in Telegram.\n\n"
-            "━━━━━━━━━━━━━━━━━━\n\n"
-            "💬 𝐍𝐞𝐞𝐝 𝐡𝐞𝐥𝐩? Use the Support button below.",
+            "⎯꯭̽͢ 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐓𝐎 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 𝐑𝐄𝐄𝐋 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ⎯꯭̽͢\\n\\n"
+            f"👋 <b>Hello, {first_name}!</b>\\n\\n"
+            "<blockquote>📥 <b>This bot helps you download Instagram Reels.</b></blockquote>\\n"
+            "<blockquote><b>To download a Reel:</b>\\n"
+            "1. Copy the Instagram Reel link.\\n"
+            "2. Send the link to this bot.\\n"
+            "3. Get the available video directly in Telegram.</blockquote>\\n\\n"
+            "━━━━━━━━━━━━━━━━━━\\n\\n"
+            "<blockquote>💬 <b>Need help?</b> Use the Support button below.</blockquote>",
             start_markup(),
+            parse_mode="HTML",
         )
         return
 
