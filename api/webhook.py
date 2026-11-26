@@ -60,8 +60,16 @@ def start_markup():
         "inline_keyboard": [
             [{"text": "📥 Download Reel", "callback_data": "download_help"}],
             [
-                {"text": "Developer", "url": f"https://t.me/{DEVELOPER.lstrip('@')}"},
-                {"text": "Support", "url": SUPPORT_URL},
+                {
+                    "text": "𝐃𝐄𝐕𝐄𝐋𝐎𝐏𝐄𝐑",
+                    "url": f"https://t.me/{DEVELOPER.lstrip('@')}",
+                    "style": "danger",
+                },
+                {
+                    "text": "𝐒𝐔𝐏𝐏𝐎𝐑𝐓",
+                    "url": SUPPORT_URL,
+                    "style": "danger",
+                },
             ],
         ]
     }
