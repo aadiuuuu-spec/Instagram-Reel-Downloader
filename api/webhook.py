@@ -1,4 +1,5 @@
 import glob
+import html
 import json
 import logging
 import os
@@ -91,6 +92,49 @@ def admin_markup():
     }
 
 
+def download_public_page_media(url, temp_dir):
+    """Last-resort fallback for a public post's Open Graph image/video."""
+    headers = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    response = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+    response.raise_for_status()
+    page = response.text[:5_000_000]
+    found = {}
+    for key in ("og:image", "og:video", "og:video:secure_url"):
+        match = re.search(
+            r'<meta[^>]+(?:property|name)=["\\']' + re.escape(key) +
+            r'["\\'][^>]+content=["\\']([^"\\']+)',
+            page, re.I
+        )
+        if not match:
+            match = re.search(
+                r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+(?:property|name)=["\\']' +
+                re.escape(key) + r'["\\']',
+                page, re.I
+            )
+        if match:
+            found[key] = html.unescape(match.group(1)).replace("&amp;", "&")
+    media_url = found.get("og:video:secure_url") or found.get("og:video") or found.get("og:image")
+    if not media_url or not media_url.startswith("https://"):
+        return []
+    media = requests.get(media_url, headers=headers, timeout=35, stream=True)
+    media.raise_for_status()
+    content_type = media.headers.get("content-type", "").lower()
+    ext = ".mp4" if "video" in content_type else ".jpg"
+    path = os.path.join(temp_dir, "instagram_public_fallback" + ext)
+    total = 0
+    with open(path, "wb") as output:
+        for chunk in media.iter_content(1024 * 128):
+            if chunk:
+                total += len(chunk)
+                if total > 48 * 1024 * 1024:
+                    raise RuntimeError("Instagram media exceeds the 48 MB download limit.")
+                output.write(chunk)
+    return [path] if total else []
+
+
 def download_reel(chat_id, url, reply_to=None):
     status = send_text(chat_id, "⏳ Processing public Instagram media...")
     status_id = status["message_id"]
@@ -155,6 +199,14 @@ def download_reel(chat_id, url, reply_to=None):
                     ]
                 except Exception:
                     logging.exception("Instaloader photo fallback failed for %s", parsed_path)
+
+            if not candidates:
+                try:
+                    candidates = download_public_page_media(url, temp_dir)
+                    if candidates:
+                        logging.info("Downloaded public Open Graph media fallback for %s", parsed_path)
+                except Exception:
+                    logging.exception("Public page metadata fallback failed for %s", parsed_path)
 
             if not candidates:
                 raise RuntimeError("No public downloadable media was returned by Instagram.")
