@@ -92,42 +92,105 @@ def admin_markup():
 
 
 def download_reel(chat_id, url, reply_to=None):
-    status = send_text(chat_id, "⏳ Processing your Instagram Reel...")
+    status = send_text(chat_id, "⏳ Processing public Instagram media...")
     status_id = status["message_id"]
 
     try:
         with tempfile.TemporaryDirectory(dir="/tmp") as temp_dir:
             options = {
-                "outtmpl": os.path.join(temp_dir, "reel.%(ext)s"),
-                "format": "best[ext=mp4]/best",
-                "noplaylist": True,
+                "outtmpl": os.path.join(temp_dir, "%(playlist_index)s_%(id)s.%(ext)s"),
+                "format": "best/bestvideo+bestaudio",
+                "noplaylist": False,
+                "ignoreerrors": True,
                 "quiet": True,
                 "no_warnings": True,
-                "socket_timeout": 20,
-                "retries": 1,
+                "socket_timeout": 25,
+                "retries": 2,
                 "max_filesize": 48 * 1024 * 1024,
             }
             with yt_dlp.YoutubeDL(options) as ydl:
                 info = ydl.extract_info(url, download=True)
-                title = (info.get("title") or "Instagram Reel")[:900]
-                candidates = glob.glob(os.path.join(temp_dir, "reel.*"))
-                if not candidates:
-                    raise RuntimeError("The Reel could not be downloaded.")
-                video_path = max(candidates, key=os.path.getsize)
+                if not info:
+                    raise RuntimeError("Instagram did not return downloadable media.")
+                title = (info.get("title") or "Instagram media")[:900]
+                candidates = [
+                    path for path in glob.glob(os.path.join(temp_dir, "*"))
+                    if os.path.isfile(path) and os.path.getsize(path) > 0
+                ]
+                candidates.sort()
 
-            size = os.path.getsize(video_path)
-            if size > 50 * 1024 * 1024:
-                raise RuntimeError("This video is larger than Telegram's 50 MB bot upload limit.")
+            if not candidates:
+                raise RuntimeError("No downloadable photo, video, or audio file was returned.")
 
-            method = "sendVideo" if video_path.lower().endswith(".mp4") else "sendDocument"
-            field = "video" if method == "sendVideo" else "document"
-            with open(video_path, "rb") as video:
-                tg(
-                    method,
-                    {"chat_id": chat_id, "caption": title[:1024]},
-                    files={field: (os.path.basename(video_path), video)},
-                    timeout=240,
-                )
+            # Telegram accepts photo/video albums in groups of 2–10.
+            album_items = []
+            separate_items = []
+            for path in candidates:
+                ext = os.path.splitext(path)[1].lower()
+                size = os.path.getsize(path)
+                if size > 50 * 1024 * 1024:
+                    logging.warning("Skipping oversized Instagram item: %s", os.path.basename(path))
+                    continue
+                if ext in (".jpg", ".jpeg", ".png", ".webp"):
+                    album_items.append((path, "photo"))
+                elif ext in (".mp4", ".mov", ".m4v", ".webm"):
+                    album_items.append((path, "video"))
+                elif ext in (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac"):
+                    separate_items.append((path, "audio"))
+                else:
+                    separate_items.append((path, "document"))
+
+            if not album_items and not separate_items:
+                raise RuntimeError("No supported media files were downloaded.")
+
+            # Send photo/video items as albums when possible.
+            if len(album_items) == 1:
+                path, kind = album_items[0]
+                method = "sendPhoto" if kind == "photo" else "sendVideo"
+                field = "photo" if kind == "photo" else "video"
+                with open(path, "rb") as media:
+                    tg(method, {"chat_id": chat_id, "caption": title[:1024]},
+                       files={field: (os.path.basename(path), media)}, timeout=240)
+            else:
+                for offset in range(0, len(album_items), 10):
+                    batch = album_items[offset:offset + 10]
+                    if len(batch) == 1:
+                        path, kind = batch[0]
+                        method = "sendPhoto" if kind == "photo" else "sendVideo"
+                        field = "photo" if kind == "photo" else "video"
+                        with open(path, "rb") as media:
+                            tg(method, {"chat_id": chat_id, "caption": title[:1024]},
+                               files={field: (os.path.basename(path), media)}, timeout=240)
+                        continue
+                    media_payload = []
+                    open_files = []
+                    upload_files = {}
+                    try:
+                        for index, (path, kind) in enumerate(batch):
+                            attach_name = f"file{index}"
+                            media_payload.append({
+                                "type": kind,
+                                "media": f"attach://{attach_name}",
+                                **({"caption": title[:1024]} if index == 0 else {}),
+                            })
+                            handle = open(path, "rb")
+                            open_files.append(handle)
+                            upload_files[attach_name] = (os.path.basename(path), handle)
+                        tg("sendMediaGroup", {
+                            "chat_id": chat_id,
+                            "media": json.dumps(media_payload),
+                        }, files=upload_files, timeout=240)
+                    finally:
+                        for handle in open_files:
+                            handle.close()
+
+            for path, kind in separate_items:
+                method = "sendAudio" if kind == "audio" else "sendDocument"
+                field = "audio" if kind == "audio" else "document"
+                with open(path, "rb") as media:
+                    tg(method, {"chat_id": chat_id, "caption": title[:1024]},
+                       files={field: (os.path.basename(path), media)}, timeout=240)
+
             tg("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
     except Exception as exc:
         logging.exception("Instagram media download failed for path %s", urlparse(url).path)
@@ -135,7 +198,7 @@ def download_reel(chat_id, url, reply_to=None):
         if "private" in message.lower() or "login" in message.lower():
             message = "This Instagram post is not publicly accessible. I can only process public posts you own or have permission to download."
         else:
-            message = "I couldn't download this Instagram post. It may be unavailable, unsupported, private, or too large."
+            message = "I couldn't download this Instagram media. It may be unavailable, unsupported, private, or too large."
         try:
             edit_text(chat_id, status_id, f"❌ {message}")
         except Exception:
