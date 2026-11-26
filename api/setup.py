@@ -61,14 +61,23 @@ def handle_setup(request):
         request.wfile.write(b"BOT_TOKEN is not configured")
         return
 
-    webhook_url = os.environ.get("VERCEL_URL", "")
-    if webhook_url and not webhook_url.startswith("http"):
-        webhook_url = "https://" + webhook_url
-    if not webhook_url:
+    # Use the host that received this setup request. VERCEL_URL can point
+    # at an older deployment URL in this project, leaving Telegram on a stale webhook.
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    host = host.split(",")[0].strip()
+    if not host:
+        host = os.environ.get("VERCEL_URL", "").strip()
+    if host.startswith("https://"):
+        host = host[len("https://"):]
+    elif host.startswith("http://"):
+        host = host[len("http://"):]
+    host = host.split("/")[0]
+    if not host or not host.endswith(".vercel.app"):
         request.send_response(500)
         request.end_headers()
-        request.wfile.write(b"VERCEL_URL is unavailable")
+        request.wfile.write(b"Could not determine a valid Vercel deployment host")
         return
+    webhook_url = "https://" + host
 
     payload = {
         "url": webhook_url.rstrip("/") + "/api/webhook",
