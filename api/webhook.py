@@ -1,5 +1,6 @@
 import glob
 import json
+import logging
 import os
 import re
 import tempfile
@@ -129,6 +130,7 @@ def download_reel(chat_id, url, reply_to=None):
                 )
             tg("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
     except Exception as exc:
+        logging.exception("Instagram media download failed for path %s", urlparse(url).path)
         message = str(exc)
         if "private" in message.lower() or "login" in message.lower():
             message = "This Instagram post is not publicly accessible. I can only process public posts you own or have permission to download."
