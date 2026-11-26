@@ -21,6 +21,40 @@ def handle_setup(request):
         request.wfile.write(b"Forbidden")
         return
 
+    if query.get("check", [""])[0] == "1":
+        try:
+            info_response = requests.get(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo",
+                timeout=15,
+            )
+            info_response.raise_for_status()
+            info = info_response.json()
+            if not info.get("ok"):
+                raise RuntimeError(info.get("description", "Telegram API error"))
+            details = info.get("result", {})
+            safe_result = {
+                "ok": True,
+                "webhook_url": details.get("url", ""),
+                "pending_update_count": details.get("pending_update_count", 0),
+                "last_error_date": details.get("last_error_date"),
+                "last_error_message": details.get("last_error_message"),
+                "max_connections": details.get("max_connections"),
+                "allowed_updates": details.get("allowed_updates", []),
+            }
+            body = json.dumps(safe_result).encode("utf-8")
+            request.send_response(200)
+            request.send_header("Content-Type", "application/json")
+            request.end_headers()
+            request.wfile.write(body)
+            return
+        except Exception as exc:
+            body = json.dumps({"ok": False, "error": str(exc)}).encode("utf-8")
+            request.send_response(502)
+            request.send_header("Content-Type", "application/json")
+            request.end_headers()
+            request.wfile.write(body)
+            return
+
     if not BOT_TOKEN:
         request.send_response(500)
         request.end_headers()
