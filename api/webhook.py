@@ -58,15 +58,19 @@ def is_instagram_reel(url):
 def start_markup():
     return {
         "inline_keyboard": [
-            [{"text": "📥 Download Reel", "callback_data": "download_help"}],
+            [{
+                "text": "📥 𝖣ᴏᴡɴʟᴏᴀᴅ 𝖱ᴇᴇʟ",
+                "callback_data": "download_help",
+                "style": "success",
+            }],
             [
                 {
-                    "text": "𝐃𝐄𝐕𝐄𝐋𝐎𝐏𝐄𝐑",
+                    "text": "👨‍💻 𝖣ᴇᴠᴇʟᴏᴘᴇʀ",
                     "url": f"https://t.me/{DEVELOPER.lstrip('@')}",
                     "style": "danger",
                 },
                 {
-                    "text": "𝐒𝐔𝐏𝐏𝐎𝐑𝐓",
+                    "text": "💬 𝖲ᴜᴘᴘᴏʀᴛ",
                     "url": SUPPORT_URL,
                     "style": "danger",
                 },
@@ -181,17 +185,15 @@ def process_update(update):
             return
         send_text(
             chat_id,
-            "📥 𝖨ɴsᴛᴀɢʀᴀᴍ 𝖱ᴇᴇʟ 𝖣ᴏᴡɴʟᴏᴀᴅᴇʀ\n\n"
-            "Welcome! Send a public Instagram Reel link and I'll try to send the video here.\n\n"
-            "𝗙ᴇᴀᴛᴜʀᴇs\n"
-            "• Instagram Reel Download\n"
-            "• Best available single-file video quality\n"
-            "• Personal Chat Support\n"
-            "• Group Support\n"
-            "• Owner Bot Control (/admin)\n"
-            "• ON / OFF System\n\n"
-            f"Developer: {DEVELOPER}\n"
-            "Use only for Reels you own or have permission to download.",
+            "⎯꯭̽͢ 𝐖𝐄𝐋𝐂𝐎𝐌𝐄 𝐓𝐎 𝐈𝐍𝐒𝐓𝐀𝐆𝐑𝐀𝐌 𝐑𝐄𝐄𝐋 𝐃𝐎𝐖𝐍𝐋𝐎𝐀𝐃𝐄𝐑 ⎯꯭̽͢\n\n"
+            f"👋 𝐇𝐞𝐥𝐥𝐨, {message.get('from', {}).get('first_name', 'there')}!\n\n"
+            "📥 𝐓𝐡𝐢𝐬 𝐛𝐨𝐭 𝐡𝐞𝐥𝐩𝐬 𝐲𝐨𝐮 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐈𝐧𝐬𝐭𝐚𝐠𝐫𝐚𝐦 𝐑𝐞𝐞𝐥𝐬.\n\n"
+            "𝐓𝐨 𝐝𝐨𝐰𝐧𝐥𝐨𝐚𝐝 𝐚 𝐑𝐞𝐞𝐥:\n"
+            "1. Copy the Instagram Reel link.\n"
+            "2. Send the link to this bot.\n"
+            "3. Get the available video directly in Telegram.\n\n"
+            "━━━━━━━━━━━━━━━━━━\n\n"
+            "💬 𝐍𝐞𝐞𝐝 𝐡𝐞𝐥𝐩? Use the Support button below.",
             start_markup(),
         )
         return
