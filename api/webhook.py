@@ -93,7 +93,7 @@ def admin_markup():
 
 
 def download_public_page_media(url, temp_dir):
-    """Last-resort fallback for a public post's Open Graph image/video."""
+    """Last-resort fallback for media exposed in a public page's Open Graph tags."""
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
@@ -103,17 +103,9 @@ def download_public_page_media(url, temp_dir):
     page = response.text[:5_000_000]
     found = {}
     for key in ("og:image", "og:video", "og:video:secure_url"):
-        match = re.search(
-            r'<meta[^>]+(?:property|name)=["\\']' + re.escape(key) +
-            r'["\\'][^>]+content=["\\']([^"\\']+)',
-            page, re.I
-        )
-        if not match:
-            match = re.search(
-                r'<meta[^>]+content=["\\']([^"\\']+)["\\'][^>]+(?:property|name)=["\\']' +
-                re.escape(key) + r'["\\']',
-                page, re.I
-            )
+        pattern_a = r"<meta[^>]+(?:property|name)=['\\\"]" + re.escape(key) + r"['\\\"][^>]+content=['\\\"]([^'\\\"]+)"
+        pattern_b = r"<meta[^>]+content=['\\\"]([^'\\\"]+)['\\\"][^>]+(?:property|name)=['\\\"]" + re.escape(key) + r"['\\\"]"
+        match = re.search(pattern_a, page, re.I) or re.search(pattern_b, page, re.I)
         if match:
             found[key] = html.unescape(match.group(1)).replace("&amp;", "&")
     media_url = found.get("og:video:secure_url") or found.get("og:video") or found.get("og:image")
