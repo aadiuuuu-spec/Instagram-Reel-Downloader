@@ -97,35 +97,72 @@ def download_reel(chat_id, url, reply_to=None):
 
     try:
         with tempfile.TemporaryDirectory(dir="/tmp") as temp_dir:
-            options = {
-                "outtmpl": os.path.join(temp_dir, "%(playlist_index)s_%(id)s.%(ext)s"),
-                "format": "best/bestvideo+bestaudio",
-                "noplaylist": False,
-                "ignoreerrors": True,
-                "quiet": True,
-                "no_warnings": True,
-                "socket_timeout": 25,
-                "retries": 2,
-                "max_filesize": 48 * 1024 * 1024,
-            }
-            with yt_dlp.YoutubeDL(options) as ydl:
-                info = ydl.extract_info(url, download=True)
-                if not info:
-                    raise RuntimeError("Instagram did not return downloadable media.")
-                title = (info.get("title") or "Instagram media")[:900]
+            candidates = []
+            title = "Instagram media"
+            parsed_path = urlparse(url).path
+
+            # yt-dlp handles Reels/videos. Instagram photo posts often return
+            # "There is no video in this post", so use Instaloader for /p/ posts.
+            try:
+                options = {
+                    "outtmpl": os.path.join(temp_dir, "%(playlist_index)s_%(id)s.%(ext)s"),
+                    "format": "best/bestvideo+bestaudio",
+                    "noplaylist": False,
+                    "ignoreerrors": True,
+                    "quiet": True,
+                    "no_warnings": True,
+                    "socket_timeout": 25,
+                    "retries": 2,
+                    "max_filesize": 48 * 1024 * 1024,
+                }
+                with yt_dlp.YoutubeDL(options) as ydl:
+                    info = ydl.extract_info(url, download=True)
+                    if info:
+                        title = (info.get("title") or title)[:900]
                 candidates = [
                     path for path in glob.glob(os.path.join(temp_dir, "*"))
                     if os.path.isfile(path) and os.path.getsize(path) > 0
+                    and not path.endswith((".json", ".txt"))
                 ]
-                candidates.sort()
+            except Exception:
+                logging.exception("yt-dlp extraction failed for %s", parsed_path)
+
+            if not candidates and re.match(r"^/p/", parsed_path, re.I):
+                try:
+                    import instaloader
+                    loader = instaloader.Instaloader(
+                        dirname_pattern=temp_dir,
+                        filename_pattern="{shortcode}",
+                        download_pictures=True,
+                        download_videos=True,
+                        download_video_thumbnails=False,
+                        download_geotags=False,
+                        download_comments=False,
+                        save_metadata=False,
+                        compress_json=False,
+                        post_metadata_txt_pattern="",
+                    )
+                    shortcode = parsed_path.strip("/").split("/")[1]
+                    post = instaloader.Post.from_shortcode(loader.context, shortcode)
+                    title = (post.caption or "Instagram photo post")[:900]
+                    loader.download_post(post, target="media")
+                    candidates = [
+                        path for path in glob.glob(os.path.join(temp_dir, "**", "*"), recursive=True)
+                        if os.path.isfile(path) and os.path.getsize(path) > 0
+                        and os.path.splitext(path)[1].lower() in (
+                            ".jpg", ".jpeg", ".png", ".webp", ".mp4", ".mov", ".m4v"
+                        )
+                    ]
+                except Exception:
+                    logging.exception("Instaloader photo fallback failed for %s", parsed_path)
 
             if not candidates:
-                raise RuntimeError("No downloadable photo, video, or audio file was returned.")
+                raise RuntimeError("No public downloadable media was returned by Instagram.")
 
-            # Telegram accepts photo/video albums in groups of 2–10.
             album_items = []
             separate_items = []
-            for path in candidates:
+            audio_items = []
+            for path in sorted(candidates):
                 ext = os.path.splitext(path)[1].lower()
                 size = os.path.getsize(path)
                 if size > 50 * 1024 * 1024:
@@ -135,15 +172,32 @@ def download_reel(chat_id, url, reply_to=None):
                     album_items.append((path, "photo"))
                 elif ext in (".mp4", ".mov", ".m4v", ".webm"):
                     album_items.append((path, "video"))
+                    # Extract a separate audio file from video posts/Reels.
+                    try:
+                        import subprocess
+                        import imageio_ffmpeg
+                        audio_path = os.path.splitext(path)[0] + "_audio.mp3"
+                        ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+                        subprocess.run(
+                            [ffmpeg, "-y", "-i", path, "-vn", "-acodec", "libmp3lame",
+                             "-q:a", "4", audio_path],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=90,
+                            check=True,
+                        )
+                        if os.path.isfile(audio_path) and os.path.getsize(audio_path) > 0:
+                            audio_items.append(audio_path)
+                    except Exception:
+                        logging.exception("Audio extraction unavailable for %s", os.path.basename(path))
                 elif ext in (".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac"):
-                    separate_items.append((path, "audio"))
+                    audio_items.append(path)
                 else:
                     separate_items.append((path, "document"))
 
-            if not album_items and not separate_items:
-                raise RuntimeError("No supported media files were downloaded.")
+            if not album_items and not separate_items and not audio_items:
+                raise RuntimeError("No supported photo, video, or audio files were downloaded.")
 
-            # Send photo/video items as albums when possible.
             if len(album_items) == 1:
                 path, kind = album_items[0]
                 method = "sendPhoto" if kind == "photo" else "sendVideo"
@@ -184,12 +238,15 @@ def download_reel(chat_id, url, reply_to=None):
                         for handle in open_files:
                             handle.close()
 
-            for path, kind in separate_items:
-                method = "sendAudio" if kind == "audio" else "sendDocument"
-                field = "audio" if kind == "audio" else "document"
+            for path in audio_items:
                 with open(path, "rb") as media:
-                    tg(method, {"chat_id": chat_id, "caption": title[:1024]},
-                       files={field: (os.path.basename(path), media)}, timeout=240)
+                    tg("sendAudio", {"chat_id": chat_id, "caption": title[:1024]},
+                       files={"audio": (os.path.basename(path), media)}, timeout=240)
+
+            for path, kind in separate_items:
+                with open(path, "rb") as media:
+                    tg("sendDocument", {"chat_id": chat_id, "caption": title[:1024]},
+                       files={"document": (os.path.basename(path), media)}, timeout=240)
 
             tg("deleteMessage", {"chat_id": chat_id, "message_id": status_id})
     except Exception as exc:
