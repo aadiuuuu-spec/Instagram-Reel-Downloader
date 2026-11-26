@@ -20,7 +20,7 @@ SUPPORT_URL = os.environ.get("SUPPORT_GROUP_URL", "https://t.me/+xbOwGbcZA-AwZDk
 BOT_ENABLED = True
 
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-IG_RE = re.compile(r"https?://(?:www\.)?instagram\.com/(?:reel|reels|share/reel)/[^\s]+", re.I)
+IG_RE = re.compile(r"https?://(?:www\.)?instagram\.com/(?:p|reel|reels|share/reel)/[^\s]+", re.I)
 
 
 def tg(method, data=None, files=None, timeout=25):
@@ -50,11 +50,11 @@ def edit_text(chat_id, message_id, text, reply_markup=None):
     return tg("editMessageText", payload)
 
 
-def is_instagram_reel(url):
+def is_supported_instagram_url(url):
     parsed = urlparse(url)
     return parsed.scheme in ("http", "https") and parsed.netloc.lower() in {
         "instagram.com", "www.instagram.com"
-    } and bool(re.match(r"^/(reel|reels|share/reel)/", parsed.path, re.I))
+    } and bool(re.match(r"^/(p|reel|reels|share/reel)/", parsed.path, re.I))
 
 
 def start_markup():
@@ -131,9 +131,9 @@ def download_reel(chat_id, url, reply_to=None):
     except Exception as exc:
         message = str(exc)
         if "private" in message.lower() or "login" in message.lower():
-            message = "This Reel is not publicly accessible. I can only process public Reels you own or have permission to download."
+            message = "This Instagram post is not publicly accessible. I can only process public posts you own or have permission to download."
         else:
-            message = "I couldn't download this Reel. It may be unavailable, unsupported, or too large."
+            message = "I couldn't download this Instagram post. It may be unavailable, unsupported, private, or too large."
         try:
             edit_text(chat_id, status_id, f"❌ {message}")
         except Exception:
@@ -215,7 +215,7 @@ def process_update(update):
         return
 
     match = IG_RE.search(text)
-    if match and is_instagram_reel(match.group(0).rstrip(".,)")):
+    if match and is_supported_instagram_url(match.group(0).rstrip(".,)")):
         download_reel(chat_id, match.group(0).rstrip(".,)"))
 
 
