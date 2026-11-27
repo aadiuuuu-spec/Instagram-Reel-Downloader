@@ -1,5 +1,6 @@
 import glob
 import html
+from html.parser import HTMLParser
 import http.client
 import json
 import logging
@@ -239,29 +240,47 @@ def admin_markup():
 
 
 def download_public_page_media(url, temp_dir, image_only=False):
-    """Last-resort fallback for media exposed in a public page's Open Graph tags."""
+    """Fetch media explicitly exposed by a public Instagram page's Open Graph metadata."""
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    response = requests.get(url, headers=headers, timeout=25, allow_redirects=True)
+    session = requests.Session()
+    session.headers.update(headers)
+    # Use only the user-configured Instagram cookies; never fetch or log secrets.
+    for key, value in load_instagram_cookies().items():
+        session.cookies.set(key, value, domain=".instagram.com", path="/")
+    response = session.get(url, timeout=25, allow_redirects=True)
     response.raise_for_status()
     page = response.text[:5_000_000]
-    found = {}
-    for key in ("og:image", "og:video", "og:video:secure_url"):
-        pattern_a = r"<meta[^>]+(?:property|name)=['\\\"]" + re.escape(key) + r"['\\\"][^>]+content=['\\\"]([^'\\\"]+)"
-        pattern_b = r"<meta[^>]+content=['\\\"]([^'\\\"]+)['\\\"][^>]+(?:property|name)=['\\\"]" + re.escape(key) + r"['\\\"]"
-        match = re.search(pattern_a, page, re.I) or re.search(pattern_b, page, re.I)
-        if match:
-            found[key] = html.unescape(match.group(1)).replace("&amp;", "&")
-    media_url = (found.get("og:image") if image_only else
-                 found.get("og:video:secure_url") or found.get("og:video") or found.get("og:image"))
+
+    class _MetaParser(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.values = {}
+        def handle_starttag(self, tag, attrs):
+            if tag.lower() != "meta":
+                return
+            attrs = {str(k).lower(): v for k, v in attrs if k}
+            key = (attrs.get("property") or attrs.get("name") or "").lower()
+            value = attrs.get("content")
+            if key in {"og:image", "og:video", "og:video:secure_url", "twitter:image"} and value:
+                self.values.setdefault(key, html.unescape(value).replace("&amp;", "&"))
+
+    parser = _MetaParser()
+    parser.feed(page)
+    found = parser.values
+    media_url = (found.get("og:image") or found.get("twitter:image") if image_only else
+                 found.get("og:video:secure_url") or found.get("og:video") or
+                 found.get("og:image") or found.get("twitter:image"))
     if not media_url or not media_url.startswith("https://"):
+        logging.info("Public Instagram page exposed no usable Open Graph media metadata")
         return []
-    media = requests.get(media_url, headers=headers, timeout=35, stream=True)
+    media = session.get(media_url, timeout=35, stream=True)
     media.raise_for_status()
     content_type = media.headers.get("content-type", "").lower()
-    ext = ".mp4" if "video" in content_type else ".jpg"
+    ext = ".mp4" if "video" in content_type or ".mp4" in urlparse(media_url).path.lower() else ".jpg"
     path = os.path.join(temp_dir, "instagram_public_fallback" + ext)
     total = 0
     with open(path, "wb") as output:
