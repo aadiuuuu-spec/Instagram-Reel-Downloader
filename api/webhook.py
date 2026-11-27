@@ -39,45 +39,65 @@ _BAD_COOKIE_KEYS = {"path", "domain", "expires", "secure", "httponly", "samesite
 
 
 def _parse_cookie_text(text):
-    """Accepts a 'a=b; c=d' header string, Netscape cookies.txt text, or a JSON export."""
-    text = (text or "").strip().strip("\"").strip("'")
+    """Parse only Instagram cookies from Netscape, JSON, or an explicit cookie header."""
+    text = (text or "").strip().strip('"').strip("'")
     cookies = {}
     if not text:
         return cookies
+
+    # Netscape exports carry a domain per row: reject every non-Instagram host.
+    if "\t" in text:
+        for line in text.replace("\\n", "\n").splitlines():
+            line = line.strip()
+            http_only = line.startswith("#HttpOnly_")
+            if http_only:
+                line = line[len("#HttpOnly_"):]
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) < 7:
+                continue
+            domain = parts[0].lstrip(".").lower()
+            if domain != "instagram.com" and not domain.endswith(".instagram.com"):
+                continue
+            key, value = parts[5].strip(), parts[6]
+            if key and key.lower() not in _BAD_COOKIE_KEYS:
+                cookies[key] = value
+        return cookies
+
+    # Browser JSON exports include a domain field; require it to be Instagram.
     if text[0] in "[{":
         try:
             data = json.loads(text)
             if isinstance(data, dict) and isinstance(data.get("cookies"), list):
                 data = data["cookies"]
-            if isinstance(data, dict):
-                data = [{"name": k, "value": v} for k, v in data.items()]
-            for item in data:
-                if isinstance(item, dict) and item.get("name") and item.get("value") is not None:
-                    cookies[str(item["name"])] = str(item["value"])
-            if cookies:
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    domain = str(item.get("domain") or "").lstrip(".").lower()
+                    if domain != "instagram.com" and not domain.endswith(".instagram.com"):
+                        continue
+                    key, value = str(item.get("name") or "").strip(), item.get("value")
+                    if key and value is not None and key.lower() not in _BAD_COOKIE_KEYS:
+                        cookies[key] = str(value)
                 return cookies
+            if isinstance(data, dict):
+                data = {k: v for k, v in data.items()
+                        if str(k).lower() not in _BAD_COOKIE_KEYS and v is not None}
+                return {str(k): str(v) for k, v in data.items() if str(k).strip()}
         except Exception:
             pass
-    if "\t" in text:
-        for line in text.replace("\\n", "\n").splitlines():
-            line = line.strip()
-            if line.startswith("#HttpOnly_"):
-                line = line[len("#HttpOnly_"):]
-            if not line or line.startswith("#"):
-                continue
-            parts = line.split("\t")
-            if len(parts) >= 7:
-                cookies[parts[5]] = parts[6]
-        if cookies:
-            return cookies
-    for chunk in re.split(r";\s*|\n", text):
+
+    # A plain Cookie header is accepted only via the dedicated INSTAGRAM_COOKIES
+    # environment variable, so its caller explicitly assigns it to Instagram.
+    for chunk in re.split(r";\\s*|\\n", text):
         if "=" in chunk:
             key, value = chunk.split("=", 1)
             key, value = key.strip(), value.strip()
             if key and key.lower() not in _BAD_COOKIE_KEYS:
                 cookies[key] = value
     return cookies
-
 
 def load_instagram_cookies():
     """Load only the explicitly configured INSTAGRAM_COOKIES secret.
