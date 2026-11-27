@@ -376,6 +376,8 @@ def fetch_media(url, temp_dir, meta, errors):
         return download_instagram_api_media(url, temp_dir, meta)
 
     def run_ytdlp():
+        # Safe diagnostics: report the installed extractor version, never cookies or headers.
+        logging.info("yt-dlp version in runtime: %s", getattr(yt_dlp.version, "__version__", "unknown"))
         options = {
             "outtmpl": os.path.join(temp_dir, "ytdlp_%(playlist_index)s_%(id)s.%(ext)s"),
             "format": "bv*+ba/b" if ffmpeg_dir else "b",
