@@ -80,43 +80,46 @@ def _parse_cookie_text(text):
 
 
 def load_instagram_cookies():
-    """Reads every env var whose name contains COOKIE.
-    Value starting with http(s):// is fetched as a cookies URL, anything else is parsed as raw cookies.
-    URL cookies override raw ones. Cached for 10 minutes per warm instance."""
+    """Load only the explicitly configured INSTAGRAM_COOKIES secret.
+
+    Accepted formats: Cookie request header (name=value; ...), Netscape
+    cookies.txt text, or a JSON cookie export. Never scan unrelated env vars
+    and never fetch a URL from an environment variable.
+    """
     now = time.time()
     if _COOKIE_CACHE["cookies"] is not None and now - _COOKIE_CACHE["ts"] < 600:
         return _COOKIE_CACHE["cookies"]
-    raw_values, urls = [], []
-    for key, value in os.environ.items():
-        value = (value or "").strip()
-        if "COOKIE" not in key.upper() or not value:
-            continue
-        if re.match(r"^https?://\S+$", value, re.I):
-            urls.append(value)
+
+    raw_value = (os.environ.get("INSTAGRAM_COOKIES") or "").strip()
+    cookies = _parse_cookie_text(raw_value) if raw_value else {}
+
+    # Remove any stale file left by a previous warm invocation/configuration.
+    try:
+        if not cookies:
+            if os.path.exists(COOKIE_FILE):
+                os.remove(COOKIE_FILE)
         else:
-            raw_values.append(value)
-    cookies = {}
-    for value in raw_values:
-        cookies.update(_parse_cookie_text(value))
-    for value in urls:
-        try:
-            response = requests.get(value, timeout=15)
-            response.raise_for_status()
-            cookies.update(_parse_cookie_text(response.text))
-        except Exception:
-            logging.exception("Could not fetch cookies URL")
-    if cookies:
-        try:
             lines = ["# Netscape HTTP Cookie File"]
             for key, value in cookies.items():
-                lines.append("\t".join([".instagram.com", "TRUE", "/", "TRUE", "2147483647", key, value]))
+                # Keep cookie data out of logs; only write the values to the
+                # private temporary cookie file required by yt-dlp.
+                lines.append("\\t".join([
+                    ".instagram.com", "TRUE", "/", "TRUE",
+                    "2147483647", key, value,
+                ]))
             with open(COOKIE_FILE, "w", encoding="utf-8") as handle:
-                handle.write("\n".join(lines) + "\n")
-        except Exception:
-            logging.exception("Could not write cookie file")
-    _COOKIE_CACHE.update(ts=now, cookies=cookies)
-    return cookies
+                handle.write("\\n".join(lines) + "\\n")
+            try:
+                os.chmod(COOKIE_FILE, 0o600)
+            except OSError:
+                logging.warning("Could not restrict permissions on Instagram cookie file")
+    except OSError:
+        logging.exception("Could not update Instagram cookie file")
+        cookies = {}
 
+    _COOKIE_CACHE.update(ts=now, cookies=cookies)
+    logging.info("Instagram cookie configuration loaded: %s cookie entries", len(cookies))
+    return cookies
 
 def cookie_header(cookies):
     return "; ".join(f"{k}={v}" for k, v in cookies.items())
