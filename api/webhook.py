@@ -378,9 +378,10 @@ def fetch_media(url, temp_dir, meta, errors):
             "format": "bv*+ba/b" if ffmpeg_dir else "b",
             "merge_output_format": "mp4",
             "noplaylist": False,
-            "ignoreerrors": "only_download",
+            # Do not suppress extractor failures: bubble them to fetch_media(),
+            # where the full sanitized exception is written to Vercel runtime logs.
             "quiet": True,
-            "no_warnings": True,
+            "no_warnings": False,
             "socket_timeout": 25,
             "retries": 2,
             "max_filesize": 48 * 1024 * 1024,
@@ -391,6 +392,8 @@ def fetch_media(url, temp_dir, meta, errors):
             options["cookiefile"] = COOKIE_FILE
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
+            if info is None:
+                raise RuntimeError("yt-dlp returned no media information; check the preceding extractor warning/error in Vercel logs.")
             if info and info.get("title"):
                 meta["title"] = info["title"][:900]
         return _collect_files(temp_dir)
