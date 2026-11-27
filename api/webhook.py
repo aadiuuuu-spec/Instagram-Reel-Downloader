@@ -358,8 +358,10 @@ def _collect_files(temp_dir):
 def fetch_media(url, temp_dir, meta, errors):
     """Tries several strategies. Photo/carousel posts try the cookie API first (yt-dlp only returns videos)."""
     parsed_path = urlparse(url).path
-    # Use anonymous/public extraction only. Instagram login cookies and private
-    # media-info endpoints can trigger account checkpoints and are not a bypass.
+    # Optional session cookies from Vercel environment variables may help yt-dlp
+    # retrieve media that is already publicly accessible to the configured account.
+    # They are never used to access private posts or bypass Instagram restrictions.
+    cookies = load_instagram_cookies()
     ffmpeg_exe, ffmpeg_dir = get_ffmpeg()
 
     def run_api():
@@ -380,6 +382,8 @@ def fetch_media(url, temp_dir, meta, errors):
         }
         if ffmpeg_dir:
             options["ffmpeg_location"] = ffmpeg_dir
+        if cookies and os.path.isfile(COOKIE_FILE):
+            options["cookiefile"] = COOKIE_FILE
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
             if info and info.get("title"):
