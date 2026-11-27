@@ -358,7 +358,8 @@ def _collect_files(temp_dir):
 def fetch_media(url, temp_dir, meta, errors):
     """Tries several strategies. Photo/carousel posts try the cookie API first (yt-dlp only returns videos)."""
     parsed_path = urlparse(url).path
-    cookies = load_instagram_cookies()
+    # Use anonymous/public extraction only. Instagram login cookies and private
+    # media-info endpoints can trigger account checkpoints and are not a bypass.
     ffmpeg_exe, ffmpeg_dir = get_ffmpeg()
 
     def run_api():
@@ -379,8 +380,6 @@ def fetch_media(url, temp_dir, meta, errors):
         }
         if ffmpeg_dir:
             options["ffmpeg_location"] = ffmpeg_dir
-        if cookies and os.path.isfile(COOKIE_FILE):
-            options["cookiefile"] = COOKIE_FILE
         with yt_dlp.YoutubeDL(options) as ydl:
             info = ydl.extract_info(url, download=True)
             if info and info.get("title"):
@@ -414,9 +413,8 @@ def fetch_media(url, temp_dir, meta, errors):
     def run_og():
         return download_public_page_media(url, temp_dir)
 
-    steps = [("api", run_api), ("yt-dlp", run_ytdlp), ("instaloader", run_instaloader), ("og", run_og)]
-    if not re.match(r"^/p/", parsed_path, re.I):
-        steps = [steps[1], steps[0], steps[2], steps[3]]
+    # Try public-page extractors only; don't repeatedly hit authenticated/private APIs.
+    steps = [("yt-dlp", run_ytdlp), ("og", run_og)]
 
     for name, func in steps:
         try:
@@ -540,14 +538,16 @@ def download_reel(chat_id, url, reply_to=None):
         message = str(exc)
         if DEBUG_ERRORS and OWNER_ID:
             try:
-                names = ",".join(sorted(load_instagram_cookies().keys())) or "NONE"
-                send_text(OWNER_ID, f"DEBUG {urlparse(url).path}\ncookies: {names}\n{message[:3000]}")
+                send_text(OWNER_ID, f"DEBUG {urlparse(url).path}\n{message[:3000]}")
             except Exception:
                 pass
-        if "private" in message.lower() or "login" in message.lower():
-            message = "This Instagram post is not publicly accessible. I can only process public posts you own or have permission to download."
+        lowered = message.lower()
+        if any(term in lowered for term in ("checkpoint_required", "feedback_required", "rate limit", "too many requests", "http 429", "403 forbidden")):
+            message = "Instagram is temporarily restricting automated access. Please try again later, or open the post in Instagram. The bot only supports publicly accessible media."
+        elif "private" in lowered or "login" in lowered:
+            message = "This post is not publicly accessible. The bot can only process public Instagram media."
         else:
-            message = "I couldn't download this Instagram media. It may be unavailable, unsupported, private, or too large."
+            message = "I couldn't retrieve public media from this Instagram link. The post may be unavailable, unsupported, or blocked by Instagram."
         try:
             edit_text(chat_id, status_id, f"❌ {message}")
         except Exception:
@@ -647,6 +647,9 @@ class handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b"OK")
         except Exception:
+            logging.exception("Webhook update processing failed")
+            # Acknowledge the update to avoid Telegram retry storms; the exception
+            # is now visible in Vercel runtime logs for diagnosis.
             self.send_response(200)
             self.end_headers()
             self.wfile.write(b"OK")
