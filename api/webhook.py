@@ -451,12 +451,18 @@ def fetch_media(url, temp_dir, meta, errors):
     def run_og(image_only=False):
         return download_public_page_media(url, temp_dir, image_only=image_only)
 
-    # A /p/ URL can be a photo, carousel, or video. Ask Instagram for its
-    # actual media types first; this preserves every carousel photo and avoids
-    # treating music attached to a photo post as downloadable video/audio.
+    # A /p/ URL may resolve to a photo, carousel, or video post.
+    # Try structured Instagram media first, then yt-dlp so video posts keep
+    # their original soundtrack and can also produce the separate MP3 below.
+    # The final OG fallback is image-only for /p/ URLs to avoid downloading
+    # unrelated page/player assets as media.
     is_post_url = bool(re.match(r"^/p/", parsed_path, re.I))
     if is_post_url:
-        steps = [("instagram-media-info", run_api), ("og-image-fallback", lambda: run_og(image_only=True))]
+        steps = [
+            ("instagram-media-info", run_api),
+            ("yt-dlp", run_ytdlp),
+            ("og-image-fallback", lambda: run_og(image_only=True)),
+        ]
     else:
         steps = [("yt-dlp", run_ytdlp), ("og", run_og)]
 
