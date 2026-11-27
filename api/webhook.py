@@ -103,12 +103,12 @@ def load_instagram_cookies():
             for key, value in cookies.items():
                 # Keep cookie data out of logs; only write the values to the
                 # private temporary cookie file required by yt-dlp.
-                lines.append("\\t".join([
+                lines.append("\t".join([
                     ".instagram.com", "TRUE", "/", "TRUE",
                     "2147483647", key, value,
                 ]))
             with open(COOKIE_FILE, "w", encoding="utf-8") as handle:
-                handle.write("\\n".join(lines) + "\\n")
+                handle.write("\n".join(lines) + "\n")
             try:
                 os.chmod(COOKIE_FILE, 0o600)
             except OSError:
