@@ -460,6 +460,7 @@ def fetch_media(url, temp_dir, meta, errors):
     if is_post_url:
         steps = [
             ("instagram-media-info", run_api),
+            ("instaloader-public-post", run_instaloader),
             ("yt-dlp", run_ytdlp),
             ("og-image-fallback", lambda: run_og(image_only=True)),
         ]
