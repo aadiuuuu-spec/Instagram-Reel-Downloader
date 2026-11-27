@@ -218,7 +218,7 @@ def admin_markup():
     }
 
 
-def download_public_page_media(url, temp_dir):
+def download_public_page_media(url, temp_dir, image_only=False):
     """Last-resort fallback for media exposed in a public page's Open Graph tags."""
     headers = {
         "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36",
@@ -234,7 +234,8 @@ def download_public_page_media(url, temp_dir):
         match = re.search(pattern_a, page, re.I) or re.search(pattern_b, page, re.I)
         if match:
             found[key] = html.unescape(match.group(1)).replace("&amp;", "&")
-    media_url = found.get("og:video:secure_url") or found.get("og:video") or found.get("og:image")
+    media_url = (found.get("og:image") if image_only else
+                 found.get("og:video:secure_url") or found.get("og:video") or found.get("og:image"))
     if not media_url or not media_url.startswith("https://"):
         return []
     media = requests.get(media_url, headers=headers, timeout=35, stream=True)
@@ -427,11 +428,17 @@ def fetch_media(url, temp_dir, meta, errors):
         loader.download_post(post, target="media")
         return _collect_files(os.path.join(temp_dir, "il"))
 
-    def run_og():
-        return download_public_page_media(url, temp_dir)
+    def run_og(image_only=False):
+        return download_public_page_media(url, temp_dir, image_only=image_only)
 
-    # Try public-page extractors only; don't repeatedly hit authenticated/private APIs.
-    steps = [("yt-dlp", run_ytdlp), ("og", run_og)]
+    # A /p/ URL can be a photo, carousel, or video. Ask Instagram for its
+    # actual media types first; this preserves every carousel photo and avoids
+    # treating music attached to a photo post as downloadable video/audio.
+    is_post_url = bool(re.match(r"^/p/", parsed_path, re.I))
+    if is_post_url:
+        steps = [("instagram-media-info", run_api), ("og-image-fallback", lambda: run_og(image_only=True))]
+    else:
+        steps = [("yt-dlp", run_ytdlp), ("og", run_og)]
 
     for name, func in steps:
         try:
