@@ -470,21 +470,20 @@ def fetch_media(url, temp_dir, meta, errors):
     def run_og(image_only=False):
         return download_public_page_media(url, temp_dir, image_only=image_only)
 
-    # A /p/ URL may resolve to a photo, carousel, or video post.
-    # Try structured Instagram media first, then yt-dlp so video posts keep
-    # their original soundtrack and can also produce the separate MP3 below.
-    # The final OG fallback is image-only for /p/ URLs to avoid downloading
-    # unrelated page/player assets as media.
+    # Prefer media explicitly exposed by the public page. This avoids making
+    # several API/GraphQL requests that may trigger Instagram feedback_required.
+    # yt-dlp remains next for full video + original audio; API and Instaloader
+    # remain last-resort extractors for posts/carousels.
     is_post_url = bool(re.match(r"^/p/", parsed_path, re.I))
     if is_post_url:
         steps = [
+            ("public-page-metadata", run_og),
+            ("yt-dlp", run_ytdlp),
             ("instagram-media-info", run_api),
             ("instaloader-public-post", run_instaloader),
-            ("yt-dlp", run_ytdlp),
-            ("og-image-fallback", lambda: run_og(image_only=True)),
         ]
     else:
-        steps = [("yt-dlp", run_ytdlp), ("og", run_og)]
+        steps = [("yt-dlp", run_ytdlp), ("public-page-metadata", run_og)]
 
     for name, func in steps:
         try:
