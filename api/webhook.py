@@ -127,6 +127,67 @@ def download_public_page_media(url, temp_dir):
     return [path] if total else []
 
 
+
+def download_instagram_api_media(url, temp_dir):
+    """Try Instagram's public shortcode media-info response for photo/video posts."""
+    parsed_path = urlparse(url).path.strip("/")
+    parts = parsed_path.split("/")
+    if len(parts) < 2 or parts[0].lower() not in ("p", "reel", "reels"):
+        return []
+    shortcode = parts[1]
+    headers = {
+        "User-Agent": "Instagram  Android (35/15; 420dpi; 1080x2400; Google; Pixel 8; shiba; en_US; 650000000)",
+        "X-IG-App-ID": "936619743392459",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.instagram.com/",
+    }
+    endpoint = f"https://www.instagram.com/api/v1/media/shortcode/{shortcode}/info/"
+    response = requests.get(endpoint, headers=headers, timeout=25)
+    response.raise_for_status()
+    payload = response.json()
+    items = payload.get("items") or []
+    if not items:
+        raise RuntimeError("Instagram media-info endpoint returned no items.")
+    root = items[0]
+    media_items = (root.get("carousel_media") or []) if root.get("carousel_media") else [root]
+    saved = []
+    session = requests.Session()
+    session.headers.update(headers)
+    for index, item in enumerate(media_items, start=1):
+        is_video = bool(item.get("media_type") == 2 or item.get("video_versions"))
+        if is_video:
+            versions = item.get("video_versions") or []
+            media_url = versions[0].get("url") if versions else None
+            ext = ".mp4"
+        else:
+            image_data = item.get("image_versions2") or {}
+            candidates = image_data.get("candidates") or []
+            media_url = candidates[0].get("url") if candidates else None
+            ext = ".jpg"
+        if not media_url:
+            continue
+        media_response = session.get(media_url, timeout=35, stream=True)
+        media_response.raise_for_status()
+        content_type = media_response.headers.get("content-type", "").lower()
+        if "video" in content_type:
+            ext = ".mp4"
+        elif "image" in content_type:
+            ext = ".jpg"
+        path = os.path.join(temp_dir, f"instagram_api_{index}{ext}")
+        total = 0
+        with open(path, "wb") as output:
+            for chunk in media_response.iter_content(128 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > 48 * 1024 * 1024:
+                    raise RuntimeError("Instagram media exceeds the 48 MB per-file limit.")
+                output.write(chunk)
+        if total:
+            saved.append(path)
+    return saved
+
 def download_reel(chat_id, url, reply_to=None):
     status = send_text(chat_id, "⏳ Processing public Instagram media...")
     status_id = status["message_id"]
@@ -191,6 +252,14 @@ def download_reel(chat_id, url, reply_to=None):
                     ]
                 except Exception:
                     logging.exception("Instaloader photo fallback failed for %s", parsed_path)
+
+            if not candidates:
+                try:
+                    candidates = download_instagram_api_media(url, temp_dir)
+                    if candidates:
+                        logging.info("Downloaded Instagram shortcode API media for %s (%s files)", parsed_path, len(candidates))
+                except Exception:
+                    logging.exception("Instagram shortcode API fallback failed for %s", parsed_path)
 
             if not candidates:
                 try:
