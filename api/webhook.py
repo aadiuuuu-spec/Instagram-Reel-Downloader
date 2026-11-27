@@ -91,7 +91,7 @@ def _parse_cookie_text(text):
 
     # A plain Cookie header is accepted only via the dedicated INSTAGRAM_COOKIES
     # environment variable, so its caller explicitly assigns it to Instagram.
-    for chunk in re.split(r";\\s*|\\n", text):
+    for chunk in re.split(r";\s*|\n", text):
         if "=" in chunk:
             key, value = chunk.split("=", 1)
             key, value = key.strip(), value.strip()
