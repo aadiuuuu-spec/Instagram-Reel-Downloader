@@ -1,5 +1,6 @@
 import glob
 import html
+import http.client
 import json
 import logging
 import os
@@ -13,6 +14,10 @@ from urllib.parse import urlparse
 
 import requests
 import yt_dlp
+
+# Instagram may return more than Python's default 100 response headers.
+# Keep a bounded higher limit so yt-dlp can parse the response safely.
+http.client._MAXHEADERS = 200
 
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 OWNER_ID = int(os.environ.get("OWNER_ID", "7508536182"))
