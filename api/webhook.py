@@ -56,7 +56,7 @@ def is_supported_instagram_url(url):
     parsed = urlparse(url)
     return parsed.scheme in ("http", "https") and parsed.netloc.lower() in {
         "instagram.com", "www.instagram.com"
-    } and bool(re.match(r"^/(p|reel|reels|share/reel)/", parsed.path, re.I))
+    } and bool(re.match(r"^/(p|reel|reels|tv|share/(p|reel))/", parsed.path, re.I))
 
 
 def start_markup():
@@ -188,12 +188,32 @@ def download_instagram_api_media(url, temp_dir):
             saved.append(path)
     return saved
 
+def resolve_public_instagram_url(url):
+    """Follow public share-link redirects without using an authenticated session."""
+    response = requests.get(
+        url,
+        headers={"User-Agent": "Mozilla/5.0 (compatible; PublicMediaBot/1.0)"},
+        allow_redirects=True,
+        timeout=20,
+        stream=True,
+    )
+    try:
+        final_url = response.url
+    finally:
+        response.close()
+    parsed = urlparse(final_url)
+    if parsed.netloc.lower() not in {"instagram.com", "www.instagram.com"}:
+        raise RuntimeError("Instagram share link redirected outside Instagram.")
+    return final_url
+
+
 def download_reel(chat_id, url, reply_to=None):
     status = send_text(chat_id, "⏳ Processing public Instagram media...")
     status_id = status["message_id"]
 
     try:
         with tempfile.TemporaryDirectory(dir="/tmp") as temp_dir:
+            url = resolve_public_instagram_url(url)
             candidates = []
             title = "Instagram media"
             parsed_path = urlparse(url).path
@@ -397,7 +417,7 @@ def process_update(update):
 
         if data == "download_help":
             tg("answerCallbackQuery", {"callback_query_id": callback["id"]})
-            send_text(chat_id, "Send a public Instagram Reel link here. Only download videos you own or have permission to use.")
+            send_text(chat_id, "Send a public Instagram post, Reel, or TV link here. Only download media you own or have permission to use.")
             return
 
     message = update.get("message") or update.get("edited_message")
