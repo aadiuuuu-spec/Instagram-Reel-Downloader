@@ -22,7 +22,7 @@ SUPPORT_URL = os.environ.get("SUPPORT_GROUP_URL", "https://t.me/+xbOwGbcZA-AwZDk
 BOT_ENABLED = True
 
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
-IG_RE = re.compile(r"https?://(?:www\.)?instagram\.com/(?:p|reel|reels|share/reel)/[^\s]+", re.I)
+IG_RE = re.compile(r"https?://(?:www\.)?instagram\.com/(?:p|reel|reels|tv|share/(?:p|reel))/[^\s]+", re.I)
 
 
 def tg(method, data=None, files=None, timeout=25):
