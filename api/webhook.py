@@ -710,7 +710,14 @@ def fetch_media(url, temp_dir, meta, errors):
             ("instaloader-public-post", run_instaloader),
         ]
     else:
-        steps = [("yt-dlp", run_ytdlp), ("public-page-metadata", run_og)]
+        # Reels/TV videos: try yt-dlp first, then the existing public-media
+        # API and Instaloader providers as fallbacks. No private-post bypass.
+        steps = [
+            ("yt-dlp", run_ytdlp),
+            ("public-page-metadata", run_og),
+            ("instagram-media-info", run_api),
+            ("instaloader-public-post", run_instaloader),
+        ]
 
     for name, func in steps:
         try:
