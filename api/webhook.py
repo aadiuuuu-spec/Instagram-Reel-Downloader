@@ -487,144 +487,7 @@ def download_instagram_api_media(url, temp_dir, meta=None):
 
 
 def download_instagram_photo_post(url, temp_dir):
-    """Dedicated photo-only path: download the largest available image variant for each photo."""
-    parts = urlparse(url).path.strip("/").split("/")
-    if len(parts) < 2 or parts[0].lower() != "p":
-        return []
-    media_id = shortcode_to_media_id(parts[1])
-    cookies = load_instagram_cookies()
-    headers = {
-        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
-        "X-IG-App-ID": "567067343352427",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    if cookies:
-        headers["Cookie"] = cookie_header(cookies)
-        if cookies.get("csrftoken"):
-            headers["X-CSRFToken"] = cookies["csrftoken"]
-
-    payload = None
-    last_error = None
-    for endpoint in (
-        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
-        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
-    ):
-        try:
-            response = requests.get(endpoint, headers=headers, timeout=25)
-            response.raise_for_status()
-         erty") or attrs.get("name") or "").lower()
-            value = attrs.get("content")
-            if key in {"og:image", "og:video", "og:video:secure_url", "twitter:image"} and value:
-                self.values.setdefault(key, html.unescape(value).replace("&amp;", "&"))
-
-    parser = _MetaParser()
-    parser.feed(page)
-    found = parser.values
-    media_url = (found.get("og:image") or found.get("twitter:image") if image_only else
-                 found.get("og:video:secure_url") or found.get("og:video") or
-                 found.get("og:image") or found.get("twitter:image"))
-    if not media_url or not media_url.startswith("https://"):
-        logging.info("Public Instagram page exposed no usable Open Graph media metadata")
-        return []
-    media = session.get(media_url, timeout=35, stream=True)
-    media.raise_for_status()
-    content_type = media.headers.get("content-type", "").lower()
-    ext = ".mp4" if "video" in content_type or ".mp4" in urlparse(media_url).path.lower() else ".jpg"
-    path = os.path.join(temp_dir, "instagram_public_fallback" + ext)
-    total = 0
-    with open(path, "wb") as output:
-        for chunk in media.iter_content(1024 * 128):
-            if chunk:
-                total += len(chunk)
-                if total > 48 * 1024 * 1024:
-                    raise RuntimeError("Instagram media exceeds the 48 MB download limit.")
-                output.write(chunk)
-    return [path] if total else []
-
-
-
-def _save_stream(session, media_url, path_base, headers=None):
-    response = session.get(media_url, timeout=35, stream=True, headers=headers)
-    response.raise_for_status()
-    content_type = response.headers.get("content-type", "").lower()
-    ext = ".mp4" if "video" in content_type else ".jpg"
-    if "audio" in content_type:
-        ext = ".m4a"
-    path = path_base + ext
-    total = 0
-    with open(path, "wb") as output:
-        for chunk in response.iter_content(128 * 1024):
-            if not chunk:
-                continue
-            total += len(chunk)
-            if total > 48 * 1024 * 1024:
-                raise RuntimeError("Instagram media exceeds the 48 MB per-file limit.")
-            output.write(chunk)
-    return path if total else None
-
-
-def download_instagram_api_media(url, temp_dir, meta=None):
-    """Instagram private media-info API (media id from shortcode). Uses login cookies when present.
-    Returns every photo/video of a post, including carousels."""
-    parts = urlparse(url).path.strip("/").split("/")
-    if len(parts) < 2 or parts[0].lower() not in ("p", "reel", "reels", "tv"):
-        return []
-    media_id = shortcode_to_media_id(parts[1])
-    cookies = load_instagram_cookies()
-    headers = {
-        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
-        "X-IG-App-ID": "567067343352427",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    if cookies:
-        headers["Cookie"] = cookie_header(cookies)
-        if cookies.get("csrftoken"):
-            headers["X-CSRFToken"] = cookies["csrftoken"]
-    payload = None
-    last_error = None
-    for endpoint in (
-        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
-        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
-    ):
-        try:
-            response = requests.get(endpoint, headers=headers, timeout=25)
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("items"):
-                break
-        except Exception as exc:
-            last_error = exc
-    if not payload or not payload.get("items"):
-        raise RuntimeError(f"media-info API failed: {last_error}")
-    root = payload["items"][0]
-    if meta is not None:
-        caption = (root.get("caption") or {}).get("text") if isinstance(root.get("caption"), dict) else None
-        if caption:
-            meta["title"] = caption[:900]
-    media_items = root.get("carousel_media") or [root]
-    saved = []
-    session = requests.Session()
-    cdn_headers = {"User-Agent": headers["User-Agent"]}
-    for index, item in enumerate(media_items, start=1):
-        if item.get("media_type") == 2 or item.get("video_versions"):
-            versions = item.get("video_versions") or []
-            media_url = versions[0].get("url") if versions else None
-        else:
-            candidates = (item.get("image_versions2") or {}).get("candidates") or []
-            media_url = candidates[0].get("url") if candidates else None
-        if not media_url:
-            continue
-        path = _save_stream(session, media_url, os.path.join(temp_dir, f"instagram_api_{index}"), cdn_headers)
-        if path:
-            saved.append(path)
-    return saved
-
-
-
-def download_instagram_photo_post(url, temp_dir):
-    """Dedicated photo-only path: download the largest available image variant for each photo."""
+    """Download the largest available image variant for each photo in a public post."""
     parts = urlparse(url).path.strip("/").split("/")
     if len(parts) < 2 or parts[0].lower() != "p":
         return []
@@ -673,20 +536,22 @@ def download_instagram_photo_post(url, temp_dir):
             candidates,
             key=lambda candidate: (
                 int(candidate.get("width") or 0) * int(candidate.get("height") or 0),
-                int(candidate.get("width") or 0)
-            )
+                int(candidate.get("width") or 0),
+            ),
         )
         media_url = best.get("url")
         if not media_url or urlparse(media_url).scheme != "https":
             continue
         path = _save_stream(
-            session, media_url,
+            session,
+            media_url,
             os.path.join(temp_dir, f"instagram_original_photo_{index}"),
-            {"User-Agent": headers["User-Agent"]}
+            {"User-Agent": headers["User-Agent"]},
         )
         if path and os.path.splitext(path)[1].lower() in (".jpg", ".jpeg", ".png", ".webp"):
             saved.append(path)
     return saved
+
 
 def resolve_public_instagram_url(url):
     """Follow public share-link redirects without using an authenticated session."""
