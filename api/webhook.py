@@ -372,6 +372,72 @@ def download_instagram_api_media(url, temp_dir, meta=None):
     return saved
 
 
+
+def download_instagram_photo_post(url, temp_dir):
+    """Dedicated photo-only path: download the largest available image variant for each photo."""
+    parts = urlparse(url).path.strip("/").split("/")
+    if len(parts) < 2 or parts[0].lower() != "p":
+        return []
+    media_id = shortcode_to_media_id(parts[1])
+    cookies = load_instagram_cookies()
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
+        "X-IG-App-ID": "567067343352427",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if cookies:
+        headers["Cookie"] = cookie_header(cookies)
+        if cookies.get("csrftoken"):
+            headers["X-CSRFToken"] = cookies["csrftoken"]
+
+    payload = None
+    last_error = None
+    for endpoint in (
+        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
+        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
+    ):
+        try:
+            response = requests.get(endpoint, headers=headers, timeout=25)
+            response.raise_for_status()
+            candidate = response.json()
+            if candidate.get("items"):
+                payload = candidate
+                break
+        except Exception as exc:
+            last_error = exc
+    if not payload:
+        raise RuntimeError(f"photo media-info unavailable: {last_error}")
+
+    root = payload["items"][0]
+    media_items = root.get("carousel_media") or [root]
+    session = requests.Session()
+    saved = []
+    for index, item in enumerate(media_items, start=1):
+        if item.get("media_type") == 2 or item.get("video_versions"):
+            continue
+        candidates = (item.get("image_versions2") or {}).get("candidates") or []
+        if not candidates:
+            continue
+        best = max(
+            candidates,
+            key=lambda candidate: (
+                int(candidate.get("width") or 0) * int(candidate.get("height") or 0),
+                int(candidate.get("width") or 0)
+            )
+        )
+        media_url = best.get("url")
+        if not media_url or urlparse(media_url).scheme != "https":
+            continue
+        path = _save_stream(
+            session, media_url,
+            os.path.join(temp_dir, f"instagram_original_photo_{index}"),
+            {"User-Agent": headers["User-Agent"]}
+        )
+        if path and os.path.splitext(path)[1].lower() in (".jpg", ".jpeg", ".png", ".webp"):
+            saved.append(path)
+    return saved
+
 def resolve_public_instagram_url(url):
     """Follow public share-link redirects without using an authenticated session."""
     response = requests.get(
@@ -469,6 +535,18 @@ def fetch_media(url, temp_dir, meta, errors):
 
     def run_og(image_only=False):
         return download_public_page_media(url, temp_dir, image_only=image_only)
+
+    # Dedicated photo-only extraction runs first for /p/ posts.
+    # It selects the largest image candidate per carousel item and skips video thumbnails.
+    if re.match(r"^/p/", parsed_path, re.I):
+        try:
+            photo_files = download_instagram_photo_post(url, temp_dir)
+            if photo_files:
+                logging.info("Dedicated original-photo pipeline returned %s photos", len(photo_files))
+                return photo_files
+            logging.info("Dedicated original-photo pipeline found no photo media; continuing normal extraction")
+        except Exception as exc:
+            logging.warning("Dedicated original-photo pipeline failed: %s: %s", type(exc).__name__, str(exc)[:200])
 
     # Prefer media explicitly exposed by the public page. This avoids making
     # several API/GraphQL requests that may trigger Instagram feedback_required.
