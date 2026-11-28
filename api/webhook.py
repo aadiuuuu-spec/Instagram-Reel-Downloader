@@ -486,72 +486,101 @@ def download_instagram_api_media(url, temp_dir, meta=None):
     return saved
 
 
+def collect_media_urls_from_obj(obj, found):
+    """Collect the highest-resolution image URL from each Instagram carousel item."""
+    if isinstance(obj, dict):
+        # Carousel items
+        carousel = obj.get("carousel_media")
+        if isinstance(carousel, list):
+            for item in carousel:
+                collect_media_urls_from_obj(item, found)
+            return
+        # Single image candidates
+        image_versions = obj.get("image_versions2")
+        if isinstance(image_versions, dict):
+            candidates = image_versions.get("candidates")
+            if isinstance(candidates, list) and candidates:
+                best = max(
+                    (c for c in candidates if isinstance(c, dict) and c.get("url")),
+                    key=lambda c: (c.get("width") or 0) * (c.get("height") or 0),
+                    default=None,
+                )
+                if best:
+                    found.append(best["url"])
+                    return
+        for val in obj.values():
+            collect_media_urls_from_obj(val, found)
+    elif isinstance(obj, list):
+        for item in obj:
+            collect_media_urls_from_obj(item, found)
+
+
 def download_instagram_photo_post(url, temp_dir):
-    """Download the largest available image variant for each photo in a public post."""
+    """Photo downloader based on the user's supplied Desktop Web API code."""
     parts = urlparse(url).path.strip("/").split("/")
     if len(parts) < 2 or parts[0].lower() != "p":
         return []
-    media_id = shortcode_to_media_id(parts[1])
-    cookies = load_instagram_cookies()
-    headers = {
-        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
-        "X-IG-App-ID": "567067343352427",
-        "Accept": "*/*",
-        "Accept-Language": "en-US,en;q=0.9",
-    }
-    if cookies:
-        headers["Cookie"] = cookie_header(cookies)
-        if cookies.get("csrftoken"):
-            headers["X-CSRFToken"] = cookies["csrftoken"]
+    shortcode = parts[1]
 
-    payload = None
-    last_error = None
-    for endpoint in (
-        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
-        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
-    ):
-        try:
-            response = requests.get(endpoint, headers=headers, timeout=25)
-            response.raise_for_status()
-            candidate = response.json()
-            if candidate.get("items"):
-                payload = candidate
-                break
-        except Exception as exc:
-            last_error = exc
-    if not payload:
-        raise RuntimeError(f"photo media-info unavailable: {last_error}")
-
-    root = payload["items"][0]
-    media_items = root.get("carousel_media") or [root]
+    # Use the supplied code's cookie-session approach, with the existing
+    # Vercel environment secret loader instead of hard-coded placeholder values.
     session = requests.Session()
-    saved = []
-    for index, item in enumerate(media_items, start=1):
-        if item.get("media_type") == 2 or item.get("video_versions"):
-            continue
-        candidates = (item.get("image_versions2") or {}).get("candidates") or []
-        if not candidates:
-            continue
-        best = max(
-            candidates,
-            key=lambda candidate: (
-                int(candidate.get("width") or 0) * int(candidate.get("height") or 0),
-                int(candidate.get("width") or 0),
-            ),
-        )
-        media_url = best.get("url")
-        if not media_url or urlparse(media_url).scheme != "https":
-            continue
+    session.cookies.update(load_instagram_cookies())
+    session.headers.update(
+        {
+            "User-Agent": DESKTOP_UA,
+            "Accept": "*/*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": f"https://www.instagram.com/p/{shortcode}/",
+            "X-IG-App-ID": "936619743392459",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+    )
+
+    image_urls = []
+    # 1. Media info endpoint try karein
+    try:
+        media_id = shortcode_to_media_id(shortcode)
+        api_url = f"https://www.instagram.com/api/v1/media/{media_id}/info/"
+        resp = session.get(api_url, timeout=20)
+        if resp.status_code == 200:
+            data = resp.json()
+            items = data.get("items") or []
+            for item in items:
+                collect_media_urls_from_obj(item, image_urls)
+    except Exception as exc:
+        logging.debug("Supplied photo media-info method failed: %s", exc)
+
+    # 2. Agar empty raha toh ?__a=1&__d=dis try karein
+    if not image_urls:
+        try:
+            alt_url = f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis"
+            resp = session.get(alt_url, timeout=20)
+            if resp.status_code == 200:
+                data = resp.json()
+                collect_media_urls_from_obj(data, image_urls)
+        except Exception as exc:
+            logging.debug("Supplied photo alternate endpoint failed: %s", exc)
+
+    image_urls = list(dict.fromkeys(image_urls))
+    if not image_urls:
+        return []
+
+    downloaded_paths = []
+    img_headers = {
+        "User-Agent": DESKTOP_UA,
+        "Referer": "https://www.instagram.com/",
+    }
+    for idx, img_url in enumerate(image_urls[:10], start=1):
         path = _save_stream(
             session,
-            media_url,
-            os.path.join(temp_dir, f"instagram_original_photo_{index}"),
-            {"User-Agent": headers["User-Agent"]},
+            img_url,
+            os.path.join(temp_dir, f"photo_{idx}"),
+            img_headers,
         )
         if path and os.path.splitext(path)[1].lower() in (".jpg", ".jpeg", ".png", ".webp"):
-            saved.append(path)
-    return saved
-
+            downloaded_paths.append(path)
+    return downloaded_paths
 
 def resolve_public_instagram_url(url):
     """Follow public share-link redirects without using an authenticated session."""
