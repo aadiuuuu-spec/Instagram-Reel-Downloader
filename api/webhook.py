@@ -533,6 +533,39 @@ def fetch_media(url, temp_dir, meta, errors):
         loader.download_post(post, target="media")
         return _collect_files(os.path.join(temp_dir, "il"))
 
+    def run_instaloader_photos():
+        """Public photo-only provider for image posts and image-only carousels.
+
+        Mixed photo/video carousels are deliberately left to the full-media
+        provider so video slides are not silently omitted.
+        """
+        if not re.match(r"^/p/", parsed_path, re.I):
+            return []
+        import instaloader
+        loader = instaloader.Instaloader(
+            dirname_pattern=os.path.join(temp_dir, "il_photos"),
+            filename_pattern="{shortcode}",
+            download_pictures=True,
+            download_videos=False,
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False,
+            post_metadata_txt_pattern="",
+            quiet=True,
+        )
+        shortcode = parsed_path.strip("/").split("/")[1]
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        if post.is_video:
+            return []
+        if post.typename == "GraphSidecar":
+            if any(node.is_video for node in post.get_sidecar_nodes()):
+                return []
+        meta["title"] = (post.caption or "Instagram photos")[:900]
+        loader.download_post(post, target="photos")
+        return _collect_files(os.path.join(temp_dir, "il_photos"))
+
     def run_og(image_only=False):
         return download_public_page_media(url, temp_dir, image_only=image_only)
 
@@ -556,6 +589,7 @@ def fetch_media(url, temp_dir, meta, errors):
     if is_post_url:
         steps = [
             ("public-page-metadata", run_og),
+            ("instaloader-photo-carousel", run_instaloader_photos),
             ("yt-dlp", run_ytdlp),
             ("instagram-media-info", run_api),
             ("instaloader-public-post", run_instaloader),
