@@ -38,6 +38,12 @@ COOKIE_FILE = "/tmp/ig_cookies.txt"
 _COOKIE_CACHE = {"ts": 0.0, "cookies": None}
 _BAD_COOKIE_KEYS = {"path", "domain", "expires", "secure", "httponly", "samesite", "max-age"}
 
+DESKTOP_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 def _parse_cookie_text(text):
     """Parse only Instagram cookies from Netscape, JSON, or an explicit cookie header."""
@@ -100,6 +106,7 @@ def _parse_cookie_text(text):
                 cookies[key] = value
     return cookies
 
+
 def load_instagram_cookies():
     """Load only the explicitly configured INSTAGRAM_COOKIES secret.
 
@@ -141,6 +148,7 @@ def load_instagram_cookies():
     _COOKIE_CACHE.update(ts=now, cookies=cookies)
     logging.info("Instagram cookie configuration loaded: %s cookie entries", len(cookies))
     return cookies
+
 
 def cookie_header(cookies):
     return "; ".join(f"{k}={v}" for k, v in cookies.items())
@@ -210,7 +218,7 @@ def start_markup():
     return {
         "inline_keyboard": [
             [{
-                "text": "📥 𝖣ᴏᴡɴʟᴏᴀᴅ 𝖱ᴇᴇʟ",
+                "text": "📥 𝖣ᴏᴡɴʟᴏᴀᴅ 𝖱ᴇᴇʟ & 𝖯ʜᴏᴛᴏ",
                 "callback_data": "download_help",
                 "style": "success",
             }],
@@ -239,6 +247,113 @@ def admin_markup():
     }
 
 
+def _collect_photo_urls_from_obj(obj, found):
+    """Recursively collect highest-resolution photo URLs from Instagram JSON structures."""
+    if isinstance(obj, dict):
+        carousel = obj.get("carousel_media")
+        if isinstance(carousel, list):
+            for item in carousel:
+                _collect_photo_urls_from_obj(item, found)
+            return
+
+        # Skip video items in photo-only collection
+        if obj.get("media_type") == 2 or obj.get("video_versions"):
+            return
+
+        image_versions = obj.get("image_versions2")
+        if isinstance(image_versions, dict):
+            candidates = image_versions.get("candidates")
+            if isinstance(candidates, list) and candidates:
+                best = max(
+                    (c for c in candidates if isinstance(c, dict) and c.get("url")),
+                    key=lambda c: (
+                        int(c.get("width") or 0) * int(c.get("height") or 0),
+                        int(c.get("width") or 0),
+                    ),
+                    default=None,
+                )
+                if best and str(best["url"]).startswith("https://"):
+                    found.append(best["url"])
+                    return
+
+        for val in obj.values():
+            _collect_photo_urls_from_obj(val, found)
+
+    elif isinstance(obj, list):
+        for item in obj:
+            _collect_photo_urls_from_obj(item, found)
+
+
+def download_desktop_web_photo_post(url, temp_dir, meta=None):
+    """Desktop Web API photo/carousel extractor using X-IG-App-ID 936619743392459."""
+    parts = [p for p in urlparse(url).path.strip("/").split("/") if p]
+    if len(parts) < 2 or parts[0].lower() not in ("p", "share"):
+        return []
+    shortcode = parts[2] if parts[0].lower() == "share" and len(parts) >= 3 else parts[1]
+    media_id = shortcode_to_media_id(shortcode)
+
+    cookies = load_instagram_cookies()
+    session = requests.Session()
+    if cookies:
+        for k, v in cookies.items():
+            session.cookies.set(k, v, domain=".instagram.com", path="/")
+
+    headers = {
+        "User-Agent": DESKTOP_UA,
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": f"https://www.instagram.com/p/{shortcode}/",
+        "X-IG-App-ID": "936619743392459",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+    if cookies.get("csrftoken"):
+        headers["X-CSRFToken"] = cookies["csrftoken"]
+
+    photo_urls = []
+    endpoints = (
+        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
+        f"https://www.instagram.com/p/{shortcode}/?__a=1&__d=dis",
+    )
+
+    for endpoint in endpoints:
+        try:
+            resp = session.get(endpoint, headers=headers, timeout=20)
+            if resp.status_code != 200:
+                continue
+            data = resp.json()
+            if meta is not None and not meta.get("title"):
+                items = data.get("items") or []
+                if items and isinstance(items[0], dict):
+                    caption = (items[0].get("caption") or {}).get("text")
+                    if caption:
+                        meta["title"] = str(caption)[:900]
+            _collect_photo_urls_from_obj(data, photo_urls)
+            if photo_urls:
+                break
+        except Exception as exc:
+            logging.debug("Desktop web photo endpoint %s failed: %s", endpoint, exc)
+
+    unique_urls = list(dict.fromkeys(photo_urls))
+    if not unique_urls:
+        return []
+
+    saved = []
+    cdn_headers = {
+        "User-Agent": DESKTOP_UA,
+        "Referer": "https://www.instagram.com/",
+    }
+    for idx, img_url in enumerate(unique_urls[:10], start=1):
+        path = _save_stream(
+            session,
+            img_url,
+            os.path.join(temp_dir, f"instagram_web_photo_{idx}"),
+            cdn_headers,
+        )
+        if path and os.path.splitext(path)[1].lower() in (".jpg", ".jpeg", ".png", ".webp"):
+            saved.append(path)
+    return saved
+
+
 def download_public_page_media(url, temp_dir, image_only=False):
     """Fetch media explicitly exposed by a public Instagram page's Open Graph metadata."""
     headers = {
@@ -264,6 +379,141 @@ def download_public_page_media(url, temp_dir, image_only=False):
                 return
             attrs = {str(k).lower(): v for k, v in attrs if k}
             key = (attrs.get("property") or attrs.get("name") or "").lower()
+            value = attrs.get("content")
+            if key in {"og:image", "og:video", "og:video:secure_url", "twitter:image"} and value:
+                self.values.setdefault(key, html.unescape(value).replace("&amp;", "&"))
+
+    parser = _MetaParser()
+    parser.feed(page)
+    found = parser.values
+    media_url = (found.get("og:image") or found.get("twitter:image") if image_only else
+                 found.get("og:video:secure_url") or found.get("og:video") or
+                 found.get("og:image") or found.get("twitter:image"))
+    if not media_url or not media_url.startswith("https://"):
+        logging.info("Public Instagram page exposed no usable Open Graph media metadata")
+        return []
+    media = session.get(media_url, timeout=35, stream=True)
+    media.raise_for_status()
+    content_type = media.headers.get("content-type", "").lower()
+    ext = ".mp4" if "video" in content_type or ".mp4" in urlparse(media_url).path.lower() else ".jpg"
+    path = os.path.join(temp_dir, "instagram_public_fallback" + ext)
+    total = 0
+    with open(path, "wb") as output:
+        for chunk in media.iter_content(1024 * 128):
+            if chunk:
+                total += len(chunk)
+                if total > 48 * 1024 * 1024:
+                    raise RuntimeError("Instagram media exceeds the 48 MB download limit.")
+                output.write(chunk)
+    return [path] if total else []
+
+
+def _save_stream(session, media_url, path_base, headers=None):
+    response = session.get(media_url, timeout=35, stream=True, headers=headers)
+    response.raise_for_status()
+    content_type = response.headers.get("content-type", "").lower()
+    ext = ".mp4" if "video" in content_type else ".jpg"
+    if "audio" in content_type:
+        ext = ".m4a"
+    path = path_base + ext
+    total = 0
+    with open(path, "wb") as output:
+        for chunk in response.iter_content(128 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > 48 * 1024 * 1024:
+                raise RuntimeError("Instagram media exceeds the 48 MB per-file limit.")
+            output.write(chunk)
+    return path if total else None
+
+
+def download_instagram_api_media(url, temp_dir, meta=None):
+    """Instagram private media-info API (media id from shortcode). Uses login cookies when present.
+    Returns every photo/video of a post, including carousels."""
+    parts = urlparse(url).path.strip("/").split("/")
+    if len(parts) < 2 or parts[0].lower() not in ("p", "reel", "reels", "tv"):
+        return []
+    media_id = shortcode_to_media_id(parts[1])
+    cookies = load_instagram_cookies()
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
+        "X-IG-App-ID": "567067343352427",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if cookies:
+        headers["Cookie"] = cookie_header(cookies)
+        if cookies.get("csrftoken"):
+            headers["X-CSRFToken"] = cookies["csrftoken"]
+    payload = None
+    last_error = None
+    for endpoint in (
+        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
+        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
+    ):
+        try:
+            response = requests.get(endpoint, headers=headers, timeout=25)
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("items"):
+                break
+        except Exception as exc:
+            last_error = exc
+    if not payload or not payload.get("items"):
+        raise RuntimeError(f"media-info API failed: {last_error}")
+    root = payload["items"][0]
+    if meta is not None:
+        caption = (root.get("caption") or {}).get("text") if isinstance(root.get("caption"), dict) else None
+        if caption:
+            meta["title"] = caption[:900]
+    media_items = root.get("carousel_media") or [root]
+    saved = []
+    session = requests.Session()
+    cdn_headers = {"User-Agent": headers["User-Agent"]}
+    for index, item in enumerate(media_items, start=1):
+        if item.get("media_type") == 2 or item.get("video_versions"):
+            versions = item.get("video_versions") or []
+            media_url = versions[0].get("url") if versions else None
+        else:
+            candidates = (item.get("image_versions2") or {}).get("candidates") or []
+            media_url = candidates[0].get("url") if candidates else None
+        if not media_url:
+            continue
+        path = _save_stream(session, media_url, os.path.join(temp_dir, f"instagram_api_{index}"), cdn_headers)
+        if path:
+            saved.append(path)
+    return saved
+
+
+def download_instagram_photo_post(url, temp_dir):
+    """Dedicated photo-only path: download the largest available image variant for each photo."""
+    parts = urlparse(url).path.strip("/").split("/")
+    if len(parts) < 2 or parts[0].lower() != "p":
+        return []
+    media_id = shortcode_to_media_id(parts[1])
+    cookies = load_instagram_cookies()
+    headers = {
+        "User-Agent": "Instagram 275.0.0.27.98 Android (33/13; 420dpi; 1080x2400; Google; Pixel 7; panther; tensor; en_US; 458229237)",
+        "X-IG-App-ID": "567067343352427",
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+    if cookies:
+        headers["Cookie"] = cookie_header(cookies)
+        if cookies.get("csrftoken"):
+            headers["X-CSRFToken"] = cookies["csrftoken"]
+
+    payload = None
+    last_error = None
+    for endpoint in (
+        f"https://i.instagram.com/api/v1/media/{media_id}/info/",
+        f"https://www.instagram.com/api/v1/media/{media_id}/info/",
+    ):
+        try:
+            response = requests.get(endpoint, headers=headers, timeout=25)
+            response.raise_for_status()
+         erty") or attrs.get("name") or "").lower()
             value = attrs.get("content")
             if key in {"og:image", "og:video", "og:video:secure_url", "twitter:image"} and value:
                 self.values.setdefault(key, html.unescape(value).replace("&amp;", "&"))
